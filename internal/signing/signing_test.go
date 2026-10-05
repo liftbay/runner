@@ -41,3 +41,18 @@ func TestReadProfile(t *testing.T) {
 		t.Fatalf("got %+v", info)
 	}
 }
+
+func TestCertSHA256(t *testing.T) {
+	keytool := "Certificate fingerprints:\n\t SHA1: AA:BB\n\t SHA256: BF:FF:12:E4:0C:44:EE:AF:2B:76:C7:88:47:D0:07:24:D0:0D:EF:CC:CC:E6:7A:FE:78:16:EC:98:F4:38:54:89\n"
+	apksigner := "Signer #1 certificate DN: CN=x\nSigner #1 certificate SHA-256 digest: bfff12e40c44eeaf2b76c78847d00724d00defcccce67afe7816ec98f4385489\n"
+	want := "bfff12e40c44eeaf2b76c78847d00724d00defcccce67afe7816ec98f4385489"
+	if got := CertSHA256(keytool); got != want {
+		t.Fatalf("keytool: %q", got)
+	}
+	if got := CertSHA256(apksigner); got != want {
+		t.Fatalf("apksigner: %q", got)
+	}
+	if CertSHA256("nothing") != "" {
+		t.Fatal("expected empty")
+	}
+}

@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/liftbay/runner/internal/api"
 	"github.com/liftbay/runner/internal/proc"
@@ -35,24 +37,41 @@ func GenerateUploadKeystore(ctx context.Context, run proc.Runner, logCmd func(pr
 	return &api.AndroidSigning{KeystoreBase64: base64.StdEncoding.EncodeToString(data), StorePassword: password, KeyAlias: "upload", KeyPassword: password}, nil
 }
 
-// WriteKeystore decodes the keystore into dir (outside the repo) and returns the Gradle
-// injected-signing properties as ORG_GRADLE_PROJECT_* variables.
-func WriteKeystore(s *api.AndroidSigning, dir string) ([]string, error) {
+// WriteKeystore decodes the keystore into dir (outside the repo) and returns its path and the
+// Gradle arguments for AGP's injected signing.
+//
+// They are -P arguments, not ORG_GRADLE_PROJECT_android.injected.signing.* variables: gradlew is a
+// /bin/sh script, and dash (Ubuntu's /bin/sh) silently drops environment variables whose names
+// contain dots, so Gradle would fall back to debug signing. The passwords are registered for log
+// redaction by the caller.
+func WriteKeystore(s *api.AndroidSigning, dir string) (string, []string, error) {
 	data, err := base64.StdEncoding.DecodeString(s.KeystoreBase64)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	path := filepath.Join(dir, "upload.jks")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	p := "ORG_GRADLE_PROJECT_android.injected.signing."
-	return []string{
+	p := "-Pandroid.injected.signing."
+	return path, []string{
 		p + "store.file=" + path,
 		p + "store.password=" + s.StorePassword,
 		p + "key.alias=" + s.KeyAlias,
 		p + "key.password=" + s.KeyPassword,
 	}, nil
+}
+
+var sha256Line = regexp.MustCompile(`(?i)SHA-?256(?: digest)?:\s*([0-9a-f:]{64,95})`)
+
+// CertSHA256 finds the first SHA-256 certificate fingerprint in keytool or apksigner output,
+// normalised to lowercase hex without colons.
+func CertSHA256(output string) string {
+	m := sha256Line.FindStringSubmatch(output)
+	if m == nil {
+		return ""
+	}
+	return strings.ToLower(strings.ReplaceAll(m[1], ":", ""))
 }
 
 func randomHex(n int) string {

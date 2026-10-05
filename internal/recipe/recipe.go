@@ -43,6 +43,11 @@ type Build struct {
 	// OnCancel is called when the API reports a cancel request.
 	OnCancel func()
 
+	// Extra Gradle arguments (Android signing).
+	GradleArgs []string
+	// Upload key used for this build, to check the output's signature against.
+	androidKey *androidKey
+
 	phase     string
 	artifacts []artifact
 	cleanups  []func()

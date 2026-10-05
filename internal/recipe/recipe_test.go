@@ -65,6 +65,12 @@ func TestGradleHelpers(t *testing.T) {
 type fakeProc struct {
 	mu   sync.Mutex
 	cmds []proc.Cmd
+	// When set, the "built" bundle reports this signing fingerprint instead of the upload key's.
+	signedWith string
+}
+
+func (f *fakeProc) keyFingerprint() string {
+	return strings.Repeat("AB:", 31) + "AB"
 }
 
 func (f *fakeProc) Run(_ context.Context, c proc.Cmd) error {
@@ -73,10 +79,23 @@ func (f *fakeProc) Run(_ context.Context, c proc.Cmd) error {
 	f.mu.Unlock()
 	switch c.Name {
 	case "keytool":
+		switch c.Args[0] {
+		case "-list": // fingerprint of the upload key
+			c.Stdout("Certificate fingerprints:")
+			c.Stdout("\t SHA256: " + f.keyFingerprint())
+			return nil
+		case "-printcert": // fingerprint the output was signed with
+			fp := f.signedWith
+			if fp == "" {
+				fp = f.keyFingerprint()
+			}
+			c.Stdout("\t SHA256: " + fp)
+			return nil
+		}
 		i := slices.Index(c.Args, "-keystore")
 		return os.WriteFile(c.Args[i+1], []byte("KEYSTORE"), 0o600)
 	case "./gradlew":
-		if !slices.Contains(c.Env, "ORG_GRADLE_PROJECT_android.injected.signing.key.alias=upload") {
+		if !slices.Contains(c.Args, "-Pandroid.injected.signing.key.alias=upload") {
 			c.Stderr("missing signing properties")
 			return os.ErrInvalid
 		}
@@ -216,6 +235,9 @@ func TestAndroidExpoBuildAgainstFakeAPI(t *testing.T) {
 			t.Fatalf("secret leaked: %q", l.Text)
 		}
 	}
+	if !slices.ContainsFunc(fa.logs, func(l api.LogLine) bool { return strings.HasPrefix(l.Text, "Signature verified") }) {
+		t.Fatal("signature was not verified")
+	}
 	env, _ := os.ReadFile(filepath.Join(dir, ".env"))
 	if !strings.Contains(string(env), `EXPO_PUBLIC_URL="https://x"`) {
 		t.Fatalf(".env: %s", env)
@@ -262,4 +284,26 @@ func (updateRecorder) Job(context.Context) (*api.Job, error)                    
 func (updateRecorder) PutAndroidSigning(context.Context, api.AndroidSigning) error { return nil }
 func (updateRecorder) UploadArtifact(context.Context, string, string, string, string) error {
 	return nil
+}
+
+// Gradle falling back to the debug key (as with dash dropping dotted env vars) must fail the build.
+func TestSignatureMismatchFailsBuild(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "app-release.aab")
+	_ = os.WriteFile(out, []byte("AAB"), 0o644)
+	fp := &fakeProc{signedWith: strings.Repeat("CD:", 31) + "CD"}
+	b := &Build{Dir: t.TempDir(), Proc: fp, Log: nopLog{}, androidKey: &androidKey{path: "upload.jks", alias: "upload", password: "pw"}}
+	err := verifySignature(context.Background(), b, out)
+	if err == nil || !strings.Contains(err.Error(), "different key") {
+		t.Fatalf("want mismatch error, got %v", err)
+	}
+	fp.signedWith = ""
+	if err := verifySignature(context.Background(), b, out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVersionLess(t *testing.T) {
+	if !versionLess("34.0.0", "36.1.0") || versionLess("36.1.0", "9.0.0") {
+		t.Fatal("versionLess")
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -72,11 +73,12 @@ func androidSigningStep() Step {
 		}
 		b.AddSecret(s.StorePassword)
 		b.AddSecret(s.KeyPassword)
-		props, err := signing.WriteKeystore(s, b.Temp)
+		path, args, err := signing.WriteKeystore(s, b.Temp)
 		if err != nil {
 			return err
 		}
-		b.Env = append(b.Env, props...)
+		b.GradleArgs = append(b.GradleArgs, args...)
+		b.androidKey = &androidKey{path: path, alias: s.KeyAlias, password: s.StorePassword}
 		b.logf("Signing with upload key %q", s.KeyAlias)
 		return nil
 	}}
@@ -111,6 +113,7 @@ func gradle(ctx context.Context, b *Build, task string) error {
 		b.logf("Raising the Gradle heap to 4 GB for this build")
 		args = append(args, "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g")
 	}
+	args = append(args, b.GradleArgs...)
 	if err := b.run(ctx, "android", nil, "./gradlew", args...); err != nil {
 		return err
 	}
@@ -121,11 +124,19 @@ func gradle(ctx context.Context, b *Build, task string) error {
 		if err != nil {
 			return err
 		}
+		if err := verifySignature(ctx, b, p); err != nil {
+			return err
+		}
 		b.addArtifact("aab", p, ".aab", "application/octet-stream")
 	default:
 		p, err := newestFile(filepath.Join(outputs, "apk"), ".apk")
 		if err != nil {
 			return err
+		}
+		if task != "assembleDebug" {
+			if err := verifySignature(ctx, b, p); err != nil {
+				return err
+			}
 		}
 		b.addArtifact("apk", p, ".apk", "application/vnd.android.package-archive")
 	}
@@ -154,4 +165,77 @@ func newestFile(root, ext string) (string, error) {
 		return "", fmt.Errorf("no %s file found under %s", ext, root)
 	}
 	return best, nil
+}
+
+type androidKey struct{ path, alias, password string }
+
+// verifySignature checks that Gradle really signed the output with the upload key. A build that
+// silently falls back to the debug key would otherwise look fine until the Play upload is rejected.
+func verifySignature(ctx context.Context, b *Build, output string) error {
+	k := b.androidKey
+	if k == nil {
+		return nil
+	}
+	var want strings.Builder
+	if err := b.runCapture(ctx, "", nil, &want, "keytool", "-list", "-v", "-keystore", k.path, "-storepass", k.password, "-alias", k.alias); err != nil {
+		return fmt.Errorf("read upload key fingerprint: %w", err)
+	}
+	expected := signing.CertSHA256(want.String())
+
+	var got strings.Builder
+	var err error
+	if strings.HasSuffix(output, ".apk") {
+		if tool := apksigner(); tool != "" {
+			err = b.runCapture(ctx, "", nil, &got, tool, "verify", "--print-certs", output)
+		} else {
+			b.logf("apksigner not found: can't check the APK signature")
+			return nil
+		}
+	} else {
+		// App bundles are JAR-signed, which keytool can read.
+		err = b.runCapture(ctx, "", nil, &got, "keytool", "-printcert", "-jarfile", output)
+	}
+	if err != nil {
+		return fmt.Errorf("read %s signature: %w", filepath.Base(output), err)
+	}
+	actual := signing.CertSHA256(got.String())
+	if expected == "" || actual == "" {
+		return fmt.Errorf("could not read the signature fingerprints of %s", filepath.Base(output))
+	}
+	if actual != expected {
+		return fmt.Errorf("%s is signed with a different key (SHA-256 %s) than the upload key (%s)", filepath.Base(output), actual, expected)
+	}
+	b.logf("Signature verified: signed with upload key %q (SHA-256 %s)", k.alias, expected)
+	return nil
+}
+
+// apksigner from the newest installed build-tools, or "" when none is installed.
+func apksigner() string {
+	home := os.Getenv("ANDROID_HOME")
+	if home == "" {
+		home = os.Getenv("ANDROID_SDK_ROOT")
+	}
+	if home == "" {
+		return ""
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, "build-tools", "*", "apksigner"))
+	if len(matches) == 0 {
+		return ""
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		return versionLess(filepath.Base(filepath.Dir(matches[i])), filepath.Base(filepath.Dir(matches[j])))
+	})
+	return matches[len(matches)-1]
+}
+
+func versionLess(a, b string) bool {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(pa) && i < len(pb); i++ {
+		x, _ := strconv.Atoi(pa[i])
+		y, _ := strconv.Atoi(pb[i])
+		if x != y {
+			return x < y
+		}
+	}
+	return len(pa) < len(pb)
 }
