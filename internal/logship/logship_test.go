@@ -33,6 +33,8 @@ type flakySink struct {
 	got     []api.LogLine
 	batches []int
 	cancel  bool
+
+	heartbeats int
 }
 
 func (f *flakySink) SendLogs(_ context.Context, lines []api.LogLine) (bool, error) {
@@ -45,6 +47,39 @@ func (f *flakySink) SendLogs(_ context.Context, lines []api.LogLine) (bool, erro
 	f.got = append(f.got, lines...)
 	f.batches = append(f.batches, len(lines))
 	return f.cancel, nil
+}
+
+func (f *flakySink) Heartbeat(context.Context) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heartbeats++
+	return f.cancel, nil
+}
+
+// A quiet build still checks in, so the API doesn't end it as abandoned, and still sees cancel requests.
+func TestShipperHeartbeatsWhenQuiet(t *testing.T) {
+	sink := &flakySink{cancel: true}
+	cancelled := make(chan struct{}, 1)
+	s := New(sink, &Redactor{}, nil)
+	s.FlushEvery, s.HeartbeatEvery = 5*time.Millisecond, 20*time.Millisecond
+	s.OnCancel = func() {
+		select {
+		case cancelled <- struct{}{}:
+		default:
+		}
+	}
+	s.Start()
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no heartbeat while idle")
+	}
+	_ = s.Close(context.Background())
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.heartbeats == 0 || sink.calls != 0 {
+		t.Fatalf("heartbeats %d, log calls %d", sink.heartbeats, sink.calls)
+	}
 }
 
 func TestShipperKeepsOrderThroughFailures(t *testing.T) {

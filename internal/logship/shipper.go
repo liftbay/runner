@@ -18,6 +18,8 @@ const (
 
 type Sink interface {
 	SendLogs(ctx context.Context, lines []api.LogLine) (cancelRequested bool, err error)
+	// Heartbeat tells the API the runner is alive during quiet steps, and learns about cancel requests.
+	Heartbeat(ctx context.Context) (cancelRequested bool, err error)
 }
 
 // Shipper buffers lines and sends them in order from a single goroutine. A failed batch stays at
@@ -32,6 +34,9 @@ type Shipper struct {
 	FlushEvery time.Duration
 	MaxBatch   int
 	Backoff    time.Duration
+	// HeartbeatEvery is the longest the API goes without hearing from the runner. The API ends
+	// builds whose runner stopped reporting, so quiet steps (a long compile) must still check in.
+	HeartbeatEvery time.Duration
 
 	mu      sync.Mutex
 	buf     []api.LogLine
@@ -40,10 +45,12 @@ type Shipper struct {
 	done    chan struct{}
 	started bool
 	lastErr error
+	// Last successful contact with the API. Only the shipper goroutine touches it.
+	lastContact time.Time
 }
 
 func New(sink Sink, r *Redactor, echo io.Writer) *Shipper {
-	return &Shipper{sink: sink, redactor: r, echo: echo, FlushEvery: time.Second, MaxBatch: 500, Backoff: 500 * time.Millisecond,
+	return &Shipper{sink: sink, redactor: r, echo: echo, FlushEvery: time.Second, MaxBatch: 500, Backoff: 500 * time.Millisecond, HeartbeatEvery: time.Minute,
 		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
 }
 
@@ -96,6 +103,7 @@ func (s *Shipper) loop() {
 	t := time.NewTicker(s.FlushEvery)
 	defer t.Stop()
 	failures := 0
+	s.lastContact = time.Now()
 	for {
 		select {
 		case <-s.stop:
@@ -103,6 +111,7 @@ func (s *Shipper) loop() {
 		case <-t.C:
 		case <-s.kick:
 		}
+		s.heartbeatIfQuiet()
 		for {
 			sent, err := s.flushOnce(context.Background())
 			if err != nil {
@@ -120,6 +129,24 @@ func (s *Shipper) loop() {
 				break
 			}
 		}
+	}
+}
+
+// heartbeatIfQuiet checks in when nothing has been sent for HeartbeatEvery. Failures are retried on a later tick.
+func (s *Shipper) heartbeatIfQuiet() {
+	s.mu.Lock()
+	pending := len(s.buf)
+	s.mu.Unlock()
+	if pending > 0 || s.HeartbeatEvery <= 0 || time.Since(s.lastContact) < s.HeartbeatEvery {
+		return
+	}
+	cancel, err := s.sink.Heartbeat(context.Background())
+	if err != nil {
+		return
+	}
+	s.lastContact = time.Now()
+	if cancel && s.OnCancel != nil {
+		s.OnCancel()
 	}
 }
 
@@ -142,6 +169,7 @@ func (s *Shipper) flushOnce(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	s.buf = s.buf[n:]
 	s.mu.Unlock()
+	s.lastContact = time.Now()
 	if cancel && s.OnCancel != nil {
 		s.OnCancel()
 	}

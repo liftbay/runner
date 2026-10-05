@@ -145,6 +145,11 @@ func (c *Client) SendLogs(ctx context.Context, lines []LogLine) (bool, error) {
 	return out.CancelRequested, err
 }
 
+// Heartbeat is an empty status report: it only says the runner is alive (and returns cancel requests).
+func (c *Client) Heartbeat(ctx context.Context) (bool, error) {
+	return c.Update(ctx, Update{})
+}
+
 // PutAndroidSigning stores a generated upload keystore. A 409 means the project already has one.
 func (c *Client) PutAndroidSigning(ctx context.Context, s AndroidSigning) error {
 	return c.do(ctx, http.MethodPut, c.buildPath("/signing/android"), s, nil)
