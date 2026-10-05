@@ -30,10 +30,10 @@ permissions:
 
 env:
   # Pinned runner release. The archive's SHA-256 is checked before the runner starts.
-  # Release notes and provenance: https://github.com/liftbay/runner/releases/tag/v0.1.0
-  RUNNER_VERSION: "0.1.0"
-  RUNNER_SHA256_LINUX_AMD64: "20cb8815c8e88edf378bd096061fd6864cf1e5a4856b1a9b6b100e07f1a0eb1b"
-  RUNNER_SHA256_DARWIN_ARM64: "8d76ce89bdd18113007ee0c13155cd9d1d671191eef7f744ccbb679a6cf667b2"
+  # Release notes and provenance: https://github.com/liftbay/runner/releases/tag/v0.1.1
+  RUNNER_VERSION: "0.1.1"
+  RUNNER_SHA256_LINUX_AMD64: "e31f79876b50fb1c2bb81e7ae1934d2e22498ac5583a0666ae2e4ce07f6ab7ad"
+  RUNNER_SHA256_DARWIN_ARM64: "542ecd0f2613b9e4fd1c8dab3dd5147b8b73da27231efee19045fe8dcabdc375"
 
 jobs:
   android:
