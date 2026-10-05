@@ -1,0 +1,54 @@
+# Cuts a runner release from a tag. Built here in public, with SLSA build provenance signed by
+# Sigstore, so anyone can check that a release archive came from this repo at that tag.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go vet ./... && go test -race ./...
+      - name: Build archives
+        run: scripts/release.sh "${GITHUB_REF_NAME#v}"
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cat > notes.md <<NOTES
+          Liftbay runner ${version}, built from ${GITHUB_SHA} by [this workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}).
+
+          ### SHA-256
+
+          \`\`\`
+          $(cat dist/SHA256SUMS)
+          \`\`\`
+
+          ### Verify
+
+          \`\`\`sh
+          shasum -a 256 -c SHA256SUMS --ignore-missing
+          gh attestation verify liftbay-runner_${version}_linux_amd64.tar.gz --repo liftbay/runner
+          \`\`\`
+
+          Or rebuild it yourself on Linux (GNU tar, the Go version in go.mod): \`git checkout ${GITHUB_REF_NAME} && scripts/release.sh ${version}\` produces the same hashes.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" dist/* --title "liftbay-runner ${version}" --notes-file notes.md --verify-tag
