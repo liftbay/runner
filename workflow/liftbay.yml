@@ -1,10 +1,13 @@
 # Liftbay builds on your own GitHub Actions minutes.
-# Liftbay starts this workflow with workflow_dispatch; it does nothing on push or pull requests.
+# Liftbay starts this workflow; it does nothing on your own pushes or pull requests. With this file on the
+# default branch, Liftbay uses workflow_dispatch. Otherwise (a branch you're trying out), Liftbay points a
+# temporary liftbay/build/<platform>/<build id> branch at your commit, which runs this file from that commit,
+# and deletes it once the build has started.
 # The build gets no repository secrets: the runner exchanges this run's GitHub OIDC token for a
 # one-time Liftbay job token, checked against this repository and this workflow file.
 # Docs: https://github.com/liftbay/runner
 name: Liftbay build
-run-name: Liftbay build ${{ inputs.build_id }}
+run-name: Liftbay build ${{ inputs.build_id || github.ref_name }}
 
 on:
   workflow_dispatch:
@@ -23,6 +26,8 @@ on:
         required: false
         type: string
         default: https://api.liftbay.dev
+  push:
+    branches: ["liftbay/build/**"]
 
 permissions:
   contents: read
@@ -37,10 +42,19 @@ env:
 
 jobs:
   android:
-    if: inputs.platform == 'android'
+    if: inputs.platform == 'android' || startsWith(github.ref_name, 'liftbay/build/android/')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # GitHub's Linux runners start with about 14 GB free; a React Native release build (NDKs, CMake, four
+      # architectures, Gradle caches) can use more. Remove preinstalled toolchains no app build uses.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/share/swift /usr/local/lib/node_modules /usr/local/share/powershell /usr/local/share/chromium /opt/microsoft /opt/google/chrome || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h / | tail -1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-java@v4
@@ -90,11 +104,12 @@ jobs:
       - name: Build
         env:
           LIFTBAY_BUILD_ID: ${{ inputs.build_id }}
-          LIFTBAY_API_URL: ${{ inputs.api_url }}
-        run: '"$RUNNER_TEMP/liftbay-runner" run'
+          LIFTBAY_API_URL: ${{ inputs.api_url || vars.LIFTBAY_API_URL || 'https://api.liftbay.dev' }}
+        # On a liftbay/build/<platform>/<build id> branch, the build id is the branch name's last part.
+        run: 'LIFTBAY_BUILD_ID="${LIFTBAY_BUILD_ID:-${GITHUB_REF_NAME##*/}}" "$RUNNER_TEMP/liftbay-runner" run'
 
   ios:
-    if: inputs.platform == 'ios'
+    if: inputs.platform == 'ios' || startsWith(github.ref_name, 'liftbay/build/ios/')
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -145,5 +160,6 @@ jobs:
       - name: Build
         env:
           LIFTBAY_BUILD_ID: ${{ inputs.build_id }}
-          LIFTBAY_API_URL: ${{ inputs.api_url }}
-        run: '"$RUNNER_TEMP/liftbay-runner" run'
+          LIFTBAY_API_URL: ${{ inputs.api_url || vars.LIFTBAY_API_URL || 'https://api.liftbay.dev' }}
+        # On a liftbay/build/<platform>/<build id> branch, the build id is the branch name's last part.
+        run: 'LIFTBAY_BUILD_ID="${LIFTBAY_BUILD_ID:-${GITHUB_REF_NAME##*/}}" "$RUNNER_TEMP/liftbay-runner" run'

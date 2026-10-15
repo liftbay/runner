@@ -55,6 +55,14 @@ func setupStep() Step {
 		if err := writeDotEnv(filepath.Join(b.Dir, ".env"), j.Env); err != nil {
 			return err
 		}
+		// The update channel baked into the app (read by @liftbay/expo-plugin at prebuild), from the build
+		// profile. An environment variable set by the user wins.
+		if !hasEnv(j.Env, "LIFTBAY_CHANNEL") {
+			if ch := ProfileChannel(b.Dir, j.Build.Profile); ch != "" {
+				b.Env = append(b.Env, "LIFTBAY_CHANNEL="+ch)
+				b.logf("Update channel: %s", ch)
+			}
+		}
 		meta := readMetadata(ctx, b.Dir, j.Build.Platform)
 		if meta.Commit != "" || meta.AppVersion != "" || meta.BuildNumber != "" {
 			b.logf("Commit %s · version %s (%s)", orDash(meta.Commit), orDash(meta.AppVersion), orDash(meta.BuildNumber))
@@ -64,6 +72,47 @@ func setupStep() Step {
 		}
 		return nil
 	}}
+}
+
+func hasEnv(env []api.EnvVar, key string) bool {
+	for _, v := range env {
+		if v.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// ProfileChannel is the update channel of a build profile: liftbay.json's build.profiles.<name>.channel,
+// else eas.json's build.<name>.channel (following "extends"). Empty when neither sets one.
+func ProfileChannel(dir, profile string) string {
+	var lb struct {
+		Build struct {
+			Profiles map[string]struct {
+				Channel string `json:"channel"`
+			} `json:"profiles"`
+		} `json:"build"`
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "liftbay.json")); err == nil && json.Unmarshal(data, &lb) == nil {
+		if ch := lb.Build.Profiles[profile].Channel; ch != "" {
+			return ch
+		}
+	}
+	var eas struct {
+		Build map[string]struct {
+			Channel string `json:"channel"`
+			Extends string `json:"extends"`
+		} `json:"build"`
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "eas.json")); err == nil && json.Unmarshal(data, &eas) == nil {
+		for name, seen := profile, map[string]bool{}; name != "" && !seen[name]; name = eas.Build[name].Extends {
+			seen[name] = true
+			if ch := eas.Build[name].Channel; ch != "" {
+				return ch
+			}
+		}
+	}
+	return ""
 }
 
 // writeDotEnv adds the job's variables to .env. They are also exported into every command's

@@ -307,3 +307,28 @@ func TestVersionLess(t *testing.T) {
 		t.Fatal("versionLess")
 	}
 }
+
+func TestProfileChannel(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := ProfileChannel(dir, "preview"); got != "" {
+		t.Fatalf("no config: got %q", got)
+	}
+	write("eas.json", `{"build":{"base":{"channel":"staging"},"preview":{"extends":"base"},"production":{"channel":"production"},"loop":{"extends":"loop"}}}`)
+	for profile, want := range map[string]string{"preview": "staging", "production": "production", "loop": "", "missing": ""} {
+		if got := ProfileChannel(dir, profile); got != want {
+			t.Errorf("eas.json %s: got %q, want %q", profile, got, want)
+		}
+	}
+	write("liftbay.json", `{"build":{"profiles":{"preview":{"channel":"preview"}}}}`)
+	if got := ProfileChannel(dir, "preview"); got != "preview" {
+		t.Errorf("liftbay.json wins: got %q", got)
+	}
+	if got := ProfileChannel(dir, "production"); got != "production" {
+		t.Errorf("falls back to eas.json: got %q", got)
+	}
+}
