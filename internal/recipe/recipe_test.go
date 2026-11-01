@@ -43,7 +43,7 @@ func TestDetectPackageManager(t *testing.T) {
 }
 
 func TestChooseScheme(t *testing.T) {
-	if s := ChooseScheme("InstaSupply", []string{"Pods-InstaSupply", "InstaSupply", "React"}); s != "InstaSupply" {
+	if s := ChooseScheme("Liftbay", []string{"Pods-Liftbay", "Liftbay", "React"}); s != "Liftbay" {
 		t.Fatal(s)
 	}
 	if s := ChooseScheme("App", []string{"EXConstants", "React-Core", "MyApp"}); s != "MyApp" {
@@ -118,6 +118,7 @@ type fakeAPI struct {
 	signing   *api.AndroidSigning
 	uploaded  map[string]string
 	completed []string
+	version   map[string]any
 }
 
 func (f *fakeAPI) handler(t *testing.T, srvURL *string) http.Handler {
@@ -140,6 +141,9 @@ func (f *fakeAPI) handler(t *testing.T, srvURL *string) http.Handler {
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			f.logs = append(f.logs, in.Lines...)
 			_, _ = w.Write([]byte(`{"nextSeq":1,"cancelRequested":false}`))
+		case r.Method == "POST" && r.URL.Path == base+"/version":
+			_ = json.NewDecoder(r.Body).Decode(&f.version)
+			_, _ = w.Write([]byte(`{"buildNumber":"43"}`))
 		case r.Method == "PUT" && r.URL.Path == base+"/signing/android":
 			f.signing = &api.AndroidSigning{}
 			_ = json.NewDecoder(r.Body).Decode(f.signing)
@@ -177,10 +181,12 @@ func TestAndroidExpoBuildAgainstFakeAPI(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "app.json"), []byte(`{"expo":{"version":"1.5.0","android":{"versionCode":42}}}`), 0o644)
 	_ = os.MkdirAll(filepath.Join(dir, "android"), 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "android", "gradlew"), []byte("#!/bin/sh\n"), 0o755)
+	_ = os.MkdirAll(filepath.Join(dir, "android", "app"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "android", "app", "build.gradle"), []byte("android {\n    defaultConfig {\n        versionCode 42\n        versionName \"1.5.0\"\n    }\n}\n"), 0o644)
 
 	job := &api.Job{
 		Build:   api.JobBuild{ID: "bld_1", Number: 7, Platform: "android", Profile: "production", Environment: "production", Distribution: "store"},
-		Project: api.JobProject{Slug: "instasupply", Name: "InstaSupply", Framework: "expo"},
+		Project: api.JobProject{Slug: "liftbay", Name: "Liftbay", Framework: "expo"},
 		Env:     []api.EnvVar{{Key: "API_KEY", Value: "super-secret-value", Secret: true}, {Key: "EXPO_PUBLIC_URL", Value: "https://x"}},
 	}
 	client := api.New(srv.URL, "bld_1", "lbj_test")
@@ -212,8 +218,15 @@ func TestAndroidExpoBuildAgainstFakeAPI(t *testing.T) {
 	for _, s := range steps {
 		names = append(names, s.Name)
 	}
-	if want := []string{"Set up environment", "Install dependencies", "Prebuild", "Prepare signing", "Gradle bundleRelease", "Upload artifacts"}; !slices.Equal(names, want) {
+	if want := []string{"Set up environment", "Install dependencies", "Prebuild", "Set build number", "Prepare signing", "Gradle bundleRelease", "Upload artifacts"}; !slices.Equal(names, want) {
 		t.Fatalf("steps %v", names)
+	}
+	// Store build: Liftbay's next number replaces the generated versionCode.
+	if fa.version["localBuildNumber"] != "42" || fa.version["increment"] != true {
+		t.Fatalf("version request %v", fa.version)
+	}
+	if gradle, _ := os.ReadFile(filepath.Join(dir, "android", "app", "build.gradle")); !strings.Contains(string(gradle), "versionCode 43\n") {
+		t.Fatalf("build.gradle %s", gradle)
 	}
 	last := fa.updates[len(fa.updates)-1]
 	for _, p := range last.Phases {
@@ -227,7 +240,7 @@ func TestAndroidExpoBuildAgainstFakeAPI(t *testing.T) {
 	if fa.signing == nil || fa.signing.KeyAlias != "upload" || fa.signing.KeystoreBase64 != "S0VZU1RPUkU=" {
 		t.Fatalf("signing %+v", fa.signing)
 	}
-	if fa.uploaded["instasupply-7.aab"] != "aab" || len(fa.completed) != 1 {
+	if fa.uploaded["liftbay-7.aab"] != "aab" || len(fa.completed) != 1 {
 		t.Fatalf("artifacts %v %v", fa.uploaded, fa.completed)
 	}
 	for _, l := range fa.logs {
@@ -282,6 +295,9 @@ func (f updateRecorder) Update(_ context.Context, u api.Update) (bool, error) {
 }
 func (updateRecorder) Job(context.Context) (*api.Job, error)                       { return nil, nil }
 func (updateRecorder) PutAndroidSigning(context.Context, api.AndroidSigning) error { return nil }
+func (updateRecorder) BuildNumber(_ context.Context, local string, increment bool) (string, error) {
+	return "42", nil
+}
 func (updateRecorder) UploadArtifact(context.Context, string, string, string, string) error {
 	return nil
 }

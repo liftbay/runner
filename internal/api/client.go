@@ -145,6 +145,20 @@ func (c *Client) SendLogs(ctx context.Context, lines []LogLine) (bool, error) {
 	return out.CancelRequested, err
 }
 
+// BuildNumber asks for the build number to write into the native project (remote versioning). local is the
+// number the generated project has, used until Liftbay keeps one; increment takes the next number.
+func (c *Client) BuildNumber(ctx context.Context, local string, increment bool) (string, error) {
+	var out struct {
+		BuildNumber string `json:"buildNumber"`
+	}
+	in := map[string]any{"increment": increment}
+	if local != "" {
+		in["localBuildNumber"] = local
+	}
+	err := c.do(ctx, http.MethodPost, c.buildPath("/version"), in, &out)
+	return out.BuildNumber, err
+}
+
 // Heartbeat is an empty status report: it only says the runner is alive (and returns cancel requests).
 func (c *Client) Heartbeat(ctx context.Context) (bool, error) {
 	return c.Update(ctx, Update{})

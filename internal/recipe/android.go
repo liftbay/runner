@@ -23,7 +23,7 @@ func androidSteps(job *api.Job) []Step {
 		steps = append(steps, prebuildStep("android"))
 	}
 	if job.Build.Distribution != "simulator" {
-		steps = append(steps, androidSigningStep())
+		steps = append(steps, versionStep(), androidSigningStep())
 	}
 	task := gradleTask(job.Build.Distribution)
 	steps = append(steps, Step{Name: "Gradle " + task, Status: api.StatusRunning, Run: func(ctx context.Context, b *Build) error {

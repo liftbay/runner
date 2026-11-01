@@ -24,6 +24,9 @@ func iosSteps(job *api.Job) []Step {
 	if job.Project.Framework == "expo" {
 		steps = append(steps, prebuildStep("ios"))
 	}
+	if job.Build.Distribution != "simulator" {
+		steps = append(steps, versionStep())
+	}
 	steps = append(steps, Step{Name: "Pod install", Status: api.StatusRunning, Run: podInstall})
 	signed := job.Build.Distribution != "simulator" && job.Signing.IOS != nil
 	if signed {

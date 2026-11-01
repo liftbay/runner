@@ -19,6 +19,7 @@ type API interface {
 	Update(ctx context.Context, u api.Update) (bool, error)
 	Job(ctx context.Context) (*api.Job, error)
 	PutAndroidSigning(ctx context.Context, s api.AndroidSigning) error
+	BuildNumber(ctx context.Context, local string, increment bool) (string, error)
 	UploadArtifact(ctx context.Context, kind, name, path, contentType string) error
 }
 
